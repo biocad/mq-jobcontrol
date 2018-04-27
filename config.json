@@ -1,0 +1,27 @@
+{
+  "build":{
+    "deps":[]
+  },
+    "deploy":{
+        "monique":{
+          "scheduler-in" : {
+              "host": "localhost",
+              "comport": 9000,
+              "techport": 9024
+          },
+          "scheduler-out" : {
+              "host": "localhost",
+              "comport": 9001,
+              "techport": 9025
+          }
+        }
+    }  
+  ,
+    "params":{
+        "mq_jobcontrol": {
+          "creator": "0000-0000-0000-jobcontrol",
+          "logfile": "/tmp/jobcontrol.log",
+          "frequency": 60000
+        }
+    }
+}
