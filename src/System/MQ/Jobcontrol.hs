@@ -5,67 +5,80 @@ module System.MQ.Jobcontrol
   ( runJobcontrol
   ) where
 
-import           Control.Concurrent            (threadDelay)
+import           Control.Concurrent            (forkIO, threadDelay)
+import           Control.Concurrent.MVar       (MVar, modifyMVar_, newMVar,
+                                                tryReadMVar)
+import           Control.Monad                 (when)
 import           Control.Monad.Except          (throwError)
 import           Control.Monad.IO.Class        (liftIO)
 import qualified Data.ByteString               as BS (readFile)
 import qualified Data.ByteString.Char8         as BSC8 (unpack)
-import           Data.Function                 (fix)
+import           Data.Maybe                    (fromJust, isJust)
 import           System.Directory              (doesFileExist)
 import           System.MQ.Component           (Env (..), TwoChannels (..),
                                                 load2Channels)
 import           System.MQ.Component.Transport (push, sub)
 import           System.MQ.Monad               (MQError (..), MQMonad,
-                                                foreverSafe)
-import           System.MQ.Protocol            (Condition (..), Encoding,
-                                                MessageType, Spec,
-                                                createMessageBS, matches,
-                                                messagePid, mkId, notExpires)
+                                                foreverSafe, runMQMonad)
+import           System.MQ.Protocol            (Encoding, Hash, MessageType,
+                                                Spec, createMessageBS,
+                                                emptyHash, messagePid, msgId,
+                                                notExpires)
 import           Text.Read                     (readMaybe)
 
 -- | Run Jobcontrol in command prompt.
 --
 runJobcontrol :: Env -> MQMonad ()
 runJobcontrol env@Env{..} = do
-    channels <- load2Channels
     printHelp
 
+    -- MVar to store ids of messages that we want to receive responses for
+    idsMVar <- liftIO $ newMVar []
+
+    _ <- liftIO $ forkIO $ receiveMessages idsMVar
+
+    channels <- load2Channels
     foreverSafe name $ do
         command <- liftIO $ getLine
         case words command of
-          ["run", spec', readMaybe -> mtype', encoding', path] -> processRun channels spec' mtype' encoding' path
+          ["run", spec', readMaybe -> mtype', encoding', path] -> processRun idsMVar channels spec' mtype' encoding' path
           ["help", "run"]                                      -> printHelpRun
           ["help"]                                             -> printHelp
           _                                                    -> printError
   where
-    processRun :: TwoChannels -> Spec -> Maybe MessageType -> Encoding -> FilePath -> MQMonad ()
-    processRun _ _ Nothing _ _ = throwError (MQComponentError "Unknown type of message")
-    processRun TwoChannels{..} spec' (Just mtype') encoding' path = do
+    processRun :: MVar [Hash] -> TwoChannels -> Spec -> Maybe MessageType -> Encoding -> FilePath -> MQMonad ()
+    processRun _ _ _ Nothing _ _ = throwError (MQComponentError "Unknown type of message")
+    processRun idsMVar TwoChannels{..} spec' (Just mtype') encoding' path = do
         -- Throw error if path to file is invalid
         checkPath path
         -- If check of path hasn't failed, then we are able to read file
         dataBS <- liftIO $ BS.readFile path
 
-        -- Generate parent id for message that will be sent to queue. We need parent id to get response to message
-        pId <- fst <$> mkId creator spec'
         -- Wait to make sure that id of message will be differet from its parent's id
         liftIO $ threadDelay oneSecond
         -- Create message with data that is already encoded in bytestring
-        msg <- createMessageBS pId creator notExpires spec' encoding' mtype' dataBS
+        msg <- createMessageBS emptyHash creator notExpires spec' encoding' mtype' dataBS
 
-        -- Sent message to queue
+        -- Put id of created message to MVar so thread that receives messages could receive it
+        let mId = msgId msg
+        liftIO $ modifyMVar_ idsMVar (pure . (:) mId)
+
+        -- Send message to queue
         push toScheduler env msg
-        liftIO $ putStrLn $ "Sent message to Monique. Its id: " ++ BSC8.unpack pId
+        liftIO $ putStrLn $ "Sent message to Monique. Its id: " ++ BSC8.unpack mId
 
-        fix $ \action -> do
-            -- Receive message from queue
-            (tag, response) <- sub fromScheduler env
+    receiveMessages :: MVar [Hash] -> IO ()
+    receiveMessages idsMVar = runMQMonad . foreverSafe name $ do
+        TwoChannels{..} <- load2Channels
 
-            -- If received message is answer to message that was sent, print received message.
-            -- Otherwise continue receiving messages from queue
-            if tag `matches` (messagePid :== pId)
-              then liftIO $ print response
-              else action
+        -- Receive message from queue
+        (tag, response) <- sub fromScheduler env
+
+        -- Ids of messages that we want to receive responses for
+        idsM <- liftIO $ tryReadMVar idsMVar
+
+        -- If received message is response to message that was by user, print received message.
+        when (isJust idsM && messagePid tag `elem` fromJust idsM) (liftIO $ print response)
 
     checkPath :: FilePath -> MQMonad ()
     checkPath = ((\ex -> if ex then return () else throwError existanceEr) =<<) . liftIO . doesFileExist
