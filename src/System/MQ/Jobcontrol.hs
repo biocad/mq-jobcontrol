@@ -13,16 +13,18 @@ import           Control.Monad.Except          (throwError)
 import           Control.Monad.IO.Class        (liftIO)
 import qualified Data.ByteString               as BS (readFile)
 import qualified Data.ByteString.Char8         as BSC8 (unpack)
-import           Data.Maybe                    (fromJust, isJust)
+import           Data.Map.Strict               (Map)
+import qualified Data.Map.Strict               as M (fromList, keys, (!))
 import           System.Directory              (doesFileExist)
 import           System.MQ.Component           (Env (..), TwoChannels (..),
                                                 load2Channels)
 import           System.MQ.Component.Transport (push, sub)
 import           System.MQ.Monad               (MQError (..), MQMonad,
                                                 foreverSafe, runMQMonad)
-import           System.MQ.Protocol            (Encoding, Hash, MessageType,
-                                                Spec, createMessageBS,
-                                                emptyHash, messagePid, msgId,
+import           System.MQ.Protocol            (Encoding, Hash, Message (..),
+                                                MessageType, Spec,
+                                                createMessageBS, emptyHash,
+                                                messagePid, messageSpec, msgId,
                                                 notExpires)
 import           Text.Read                     (readMaybe)
 
@@ -46,7 +48,7 @@ runJobcontrol env@Env{..} = do
           ["help"]                                             -> printHelp
           _                                                    -> printError
   where
-    processRun :: MVar [Hash] -> TwoChannels -> Spec -> Maybe MessageType -> Encoding -> FilePath -> MQMonad ()
+    processRun :: MVar [(Hash, Spec)] -> TwoChannels -> Spec -> Maybe MessageType -> Encoding -> FilePath -> MQMonad ()
     processRun _ _ _ Nothing _ _ = throwError (MQComponentError "Unknown type of message")
     processRun idsMVar TwoChannels{..} spec' (Just mtype') encoding' path = do
         -- Throw error if path to file is invalid
@@ -57,28 +59,37 @@ runJobcontrol env@Env{..} = do
         -- Wait to make sure that id of message will be differet from its parent's id
         liftIO $ threadDelay oneSecond
         -- Create message with data that is already encoded in bytestring
-        msg <- createMessageBS emptyHash creator notExpires spec' encoding' mtype' dataBS
+        msg@Message{..} <- createMessageBS emptyHash creator notExpires spec' encoding' mtype' dataBS
 
-        -- Put id of created message to MVar so thread that receives messages could receive it
-        let mId = msgId msg
-        liftIO $ modifyMVar_ idsMVar (pure . (:) mId)
+        -- Put id and spec of created message to MVar so thread that receives messages knew which messages to receive
+        modifyIds idsMVar (msgId, msgSpec)
 
         -- Send message to queue
         push toScheduler env msg
-        liftIO $ putStrLn $ "Sent message to Monique. Its id: " ++ BSC8.unpack mId
+        liftIO $ putStrLn $ "Sent message to Monique. Its id: " ++ BSC8.unpack msgId
 
-    receiveMessages :: MVar [Hash] -> IO ()
-    receiveMessages idsMVar = runMQMonad . foreverSafe name $ do
+    modifyIds :: MVar [(Hash, Spec)] -> (Hash, Spec) -> MQMonad ()
+    modifyIds idsMVar = liftIO . modifyMVar_ idsMVar . fmap pure . (:)
+
+    receiveMessages :: MVar [(Hash, Spec)] -> IO ()
+    receiveMessages idsMVar = runMQMonad $ do
         TwoChannels{..} <- load2Channels
+        foreverSafe name $ do
+            -- Receive message from queue
+            (tag, response@Message{..}) <- sub fromScheduler env
+            let pId = messagePid tag
 
-        -- Receive message from queue
-        (tag, response) <- sub fromScheduler env
+            -- Map that maps messages that we want to receive responses for to their specs
+            idsM <- maybeToMap <$> (liftIO $ tryReadMVar idsMVar)
 
-        -- Ids of messages that we want to receive responses for
-        idsM <- liftIO $ tryReadMVar idsMVar
-
-        -- If received message is response to message that was by user, print received message.
-        when (isJust idsM && messagePid tag `elem` fromJust idsM) (liftIO $ print response)
+            -- If received message is response to message that we want to receive response for then proceed
+            when (pId `elem` M.keys idsM) $ do
+              -- If spec of received message doesn't match spec of message that begot it, we save id of that
+              -- message cause it is definetly a foreign call of other component. If specs match, we don't need to
+              -- save id of received message, because it is not a foreign call
+              if messageSpec tag /= (idsM M.! pId)
+                then modifyIds idsMVar (msgId, msgSpec) >> (liftIO $ print response)
+                else liftIO $ print response
 
     checkPath :: FilePath -> MQMonad ()
     checkPath = ((\ex -> if ex then return () else throwError existanceEr) =<<) . liftIO . doesFileExist
@@ -104,3 +115,6 @@ runJobcontrol env@Env{..} = do
 
     oneSecond :: Int
     oneSecond = 10^(6 :: Int)
+
+    maybeToMap :: Maybe [(Hash, Spec)] -> Map Hash Spec
+    maybeToMap = maybe mempty M.fromList
