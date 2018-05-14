@@ -95,7 +95,7 @@ runJobcontrol env@Env{..} = do
     printHelpRun = liftIO $ do
         putStrLn "Sends message of given spec containing given data to Monique"
         putStrLn "<spec>         — spec of message as it is documented in API"
-        putStrLn "<data_type>    — one of following types of messages: config, response, data, error"
+        putStrLn "<data_type>    — one of following types of messages: config, result, data, error"
         putStrLn "<encoding>     — encoding of data in message that matches encoding for that type of data in API"
         putStrLn "<path/to/file> - path to file containing data, that will be sent in message, as bytestring"
 
