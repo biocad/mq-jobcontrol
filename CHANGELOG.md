@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.1.0.3] - 2018-05-15
+### Changed
+- Documentation.
+### Added
+- Configs for examples.
+
+## [0.1.0.2] - 2018-05-14
+### Changed
+- Processing for foreign calls.
+
 ## [0.1.0.1] - 2018-04-28
 ### Changed
 - Receiving messages in forked thread
