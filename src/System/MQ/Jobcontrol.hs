@@ -5,28 +5,26 @@ module System.MQ.Jobcontrol
   ( runJobcontrol
   ) where
 
-import           Control.Concurrent            (forkIO, threadDelay)
-import           Control.Concurrent.MVar       (MVar, modifyMVar_, newMVar,
-                                                tryReadMVar)
-import           Control.Monad                 (when)
-import           Control.Monad.Except          (throwError)
-import           Control.Monad.IO.Class        (liftIO)
-import qualified Data.ByteString               as BS (readFile)
-import qualified Data.ByteString.Char8         as BSC8 (unpack)
-import           Data.Map.Strict               (Map)
-import qualified Data.Map.Strict               as M (fromList, keys, (!))
-import           System.Directory              (doesFileExist)
-import           System.MQ.Component           (Env (..), TwoChannels (..),
-                                                load2Channels)
-import           System.MQ.Component.Transport (push, sub)
-import           System.MQ.Monad               (MQError (..), MQMonad,
-                                                foreverSafe, runMQMonad)
-import           System.MQ.Protocol            (Encoding, Hash, Message (..),
-                                                MessageType, Spec,
-                                                createMessageBS, emptyHash,
-                                                messagePid, messageSpec, msgId,
-                                                notExpires)
-import           Text.Read                     (readMaybe)
+import           Control.Concurrent      (forkIO, threadDelay)
+import           Control.Concurrent.MVar (MVar, modifyMVar_, newMVar,
+                                          tryReadMVar)
+import           Control.Monad           (when)
+import           Control.Monad.Except    (throwError)
+import           Control.Monad.IO.Class  (liftIO)
+import qualified Data.ByteString         as BS (readFile)
+import qualified Data.ByteString.Char8   as BSC8 (unpack)
+import           Data.Map.Strict         (Map)
+import qualified Data.Map.Strict         as M (fromList, keys, (!))
+import           System.Directory        (doesFileExist)
+import           System.MQ.Component     (Env (..), TwoChannels (..),
+                                          load2Channels, push, sub)
+import           System.MQ.Monad         (MQError (..), MQMonad, foreverSafe,
+                                          runMQMonad)
+import           System.MQ.Protocol      (Encoding, Hash, Message (..),
+                                          MessageType, Spec, createMessageBS,
+                                          emptyHash, messagePid, messageSpec,
+                                          msgId, notExpires)
+import           Text.Read               (readMaybe)
 
 -- | Run Jobcontrol in command prompt.
 --
