@@ -18,8 +18,8 @@ import qualified Data.Map.Strict         as M (fromList, keys, (!))
 import           System.Directory        (doesFileExist)
 import           System.MQ.Component     (Env (..), TwoChannels (..),
                                           load2Channels, push, sub)
-import           System.MQ.Monad         (MQError (..), MQMonad, foreverSafe,
-                                          runMQMonad)
+import           System.MQ.Error         (MQError (..), errorComponent)
+import           System.MQ.Monad         (MQMonad, foreverSafe, runMQMonad)
 import           System.MQ.Protocol      (Encoding, Hash, Message (..),
                                           MessageType, Spec, createMessageBS,
                                           emptyHash, messagePid, messageSpec,
@@ -47,7 +47,7 @@ runJobcontrol env@Env{..} = do
           _                                                    -> printError
   where
     processRun :: MVar [(Hash, Spec)] -> TwoChannels -> Spec -> Maybe MessageType -> Encoding -> FilePath -> MQMonad ()
-    processRun _ _ _ Nothing _ _ = throwError (MQComponentError "Unknown type of message")
+    processRun _ _ _ Nothing _ _ = throwError (MQError errorComponent "unknown type of message")
     processRun idsMVar TwoChannels{..} spec' (Just mtype') encoding' path = do
         -- Throw error if path to file is invalid
         checkPath path
@@ -92,7 +92,7 @@ runJobcontrol env@Env{..} = do
     checkPath :: FilePath -> MQMonad ()
     checkPath = ((\ex -> if ex then return () else throwError existanceEr) =<<) . liftIO . doesFileExist
 
-    existanceEr = MQComponentError "Given file doesn't exist"
+    existanceEr = MQError errorComponent "given file doesn't exist"
 
     printHelp :: MQMonad ()
     printHelp = liftIO $ do
