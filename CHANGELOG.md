@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.1.0.5] - 2018-05-21
+### Added
+- kill command added.
+
 ## [0.1.0.4] - 2018-05-21
 ### Changed
 - New errors in MoniQue.

@@ -1,30 +1,35 @@
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ViewPatterns    #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE ViewPatterns      #-}
 
 module System.MQ.Jobcontrol
   ( runJobcontrol
   ) where
 
-import           Control.Concurrent      (forkIO, threadDelay)
-import           Control.Concurrent.MVar (MVar, modifyMVar_, newMVar,
-                                          tryReadMVar)
-import           Control.Monad           (when)
-import           Control.Monad.Except    (throwError)
-import           Control.Monad.IO.Class  (liftIO)
-import qualified Data.ByteString         as BS (readFile)
-import qualified Data.ByteString.Char8   as BSC8 (unpack)
-import           Data.Map.Strict         (Map)
-import qualified Data.Map.Strict         as M (fromList, keys, (!))
-import           System.Directory        (doesFileExist)
-import           System.MQ.Component     (Env (..), TwoChannels (..),
-                                          load2Channels, push, sub)
-import           System.MQ.Error         (MQError (..), errorComponent)
-import           System.MQ.Monad         (MQMonad, foreverSafe, runMQMonad)
-import           System.MQ.Protocol      (Encoding, Hash, Message (..),
-                                          MessageType, Spec, createMessageBS,
-                                          emptyHash, messagePid, messageSpec,
-                                          msgId, notExpires)
-import           Text.Read               (readMaybe)
+import           Control.Concurrent           (forkIO, threadDelay)
+import           Control.Concurrent.MVar      (MVar, modifyMVar_, newMVar,
+                                               tryReadMVar)
+import           Control.Monad                (when)
+import           Control.Monad.Except         (throwError)
+import           Control.Monad.IO.Class       (liftIO)
+import qualified Data.ByteString              as BS (readFile)
+import qualified Data.ByteString.Char8        as BSC8 (unpack)
+import           Data.Map.Strict              (Map)
+import qualified Data.Map.Strict              as M (fromList, keys, (!))
+import           Data.String                  (fromString)
+import           System.Directory             (doesFileExist)
+import           System.MQ.Component          (Env (..), TwoChannels (..),
+                                               load2Channels, loadTechChannels,
+                                               push, sub)
+import           System.MQ.Error              (MQError (..), errorComponent)
+import           System.MQ.Monad              (MQMonad, foreverSafe, runMQMonad)
+import           System.MQ.Protocol           (Encoding, Hash, Message (..),
+                                               MessageType, Spec, createMessage,
+                                               createMessageBS, emptyHash,
+                                               messagePid, messageSpec, msgId,
+                                               notExpires)
+import           System.MQ.Protocol.Technical (KillConfig (..))
+import           Text.Read                    (readMaybe)
 
 -- | Run Jobcontrol in command prompt.
 --
@@ -37,12 +42,16 @@ runJobcontrol env@Env{..} = do
 
     _ <- liftIO $ forkIO $ receiveMessages idsMVar
 
-    channels <- load2Channels
+    commChannels <- load2Channels
+    techChannels <- loadTechChannels
+
     foreverSafe name $ do
         command <- liftIO $ getLine
         case words command of
-          ["run", spec', readMaybe -> mtype', encoding', path] -> processRun idsMVar channels spec' mtype' encoding' path
+          ["run", spec', readMaybe -> mtype', encoding', path] -> processRun idsMVar commChannels spec' mtype' encoding' path
+          ["kill", fromString -> jobId]                        -> processKill techChannels jobId
           ["help", "run"]                                      -> printHelpRun
+          ["help", "kill"]                                     -> printHelpKill
           ["help"]                                             -> printHelp
           _                                                    -> printError
   where
@@ -65,6 +74,9 @@ runJobcontrol env@Env{..} = do
         -- Send message to queue
         push toScheduler env msg
         liftIO $ putStrLn $ "Sent message to Monique. Its id: " ++ BSC8.unpack msgId
+
+    processKill :: TwoChannels -> Hash -> MQMonad ()
+    processKill TwoChannels{..} jId = createMessage "" creator notExpires (KillConfig jId) >>= push toScheduler env
 
     modifyIds :: MVar [(Hash, Spec)] -> (Hash, Spec) -> MQMonad ()
     modifyIds idsMVar = liftIO . modifyMVar_ idsMVar . fmap pure . (:)
@@ -97,7 +109,8 @@ runJobcontrol env@Env{..} = do
     printHelp :: MQMonad ()
     printHelp = liftIO $ do
         putStrLn "run <spec> <data_type> <encoding> <path/to/file> — run job"
-        putStrLn "help run — info about parameters of 'run'"
+        putStrLn "kill <job_msg_id> — kill job"
+        putStrLn "help <command> — info about given command"
         putStrLn "help — this info"
 
     printHelpRun :: MQMonad ()
@@ -107,6 +120,11 @@ runJobcontrol env@Env{..} = do
         putStrLn "<data_type>    — one of following types of messages: config, result, data, error"
         putStrLn "<encoding>     — encoding of data in message that matches encoding for that type of data in API"
         putStrLn "<path/to/file> - path to file containing data, that will be sent in message, as bytestring"
+
+    printHelpKill :: MQMonad ()
+    printHelpKill = liftIO $ do
+        putStrLn "Kills job that was started by message with given id"
+        putStrLn "<job_msg_id> — id of message that started the job"
 
     printError :: MQMonad ()
     printError = liftIO $ putStrLn "Incorrect command"
