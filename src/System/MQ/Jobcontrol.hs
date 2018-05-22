@@ -7,7 +7,7 @@ module System.MQ.Jobcontrol
   ) where
 
 import           Control.Concurrent           (forkIO, threadDelay)
-import           Control.Concurrent.MVar      (MVar, modifyMVar_, newMVar,
+import           Control.Concurrent.MVar      (MVar, modifyMVar_, newMVar, readMVar,
                                                tryReadMVar)
 import           Control.Monad                (when)
 import           Control.Monad.Except         (throwError)
@@ -39,6 +39,7 @@ runJobcontrol env@Env{..} = do
 
     -- MVar to store ids of messages that we want to receive responses for
     idsMVar <- liftIO $ newMVar []
+    lastAction <- liftIO $ newMVar printHelp
 
     _ <- liftIO $ forkIO $ receiveMessages idsMVar
 
@@ -47,14 +48,23 @@ runJobcontrol env@Env{..} = do
 
     foreverSafe name $ do
         command <- liftIO $ getLine
-        case words command of
-          ["run", spec', readMaybe -> mtype', encoding', path] -> processRun idsMVar commChannels spec' mtype' encoding' path
-          ["kill", fromString -> jobId]                        -> processKill techChannels jobId
-          ["help", "run"]                                      -> printHelpRun
-          ["help", "kill"]                                     -> printHelpKill
-          ["help"]                                             -> printHelp
-          _                                                    -> printError
+        let action = case words command of
+              ["run", spec', readMaybe -> mtype', encoding', path] -> processRun idsMVar commChannels spec' mtype' encoding' path
+              ["kill", fromString -> jobId]                        -> processKill techChannels jobId
+              ["help", "run"]                                      -> printHelpRun
+              ["help", "kill"]                                     -> printHelpKill
+              ["help", "rep"]                                      -> printHelpRep
+              ["help"]                                             -> printHelp
+              ["rep"]                                              -> performAction lastAction
+              _                                                    -> printError
+        when (words command /= ["rep"]) $ liftIO $ modifyMVar_ lastAction (pure . const action)
+        action
   where
+    performAction :: MVar (MQMonad ()) -> MQMonad ()
+    performAction actionVar = do
+        action <- liftIO $ readMVar actionVar
+        action
+
     processRun :: MVar [(Hash, Spec)] -> TwoChannels -> Spec -> Maybe MessageType -> Encoding -> FilePath -> MQMonad ()
     processRun _ _ _ Nothing _ _ = throwError (MQError errorComponent "unknown type of message")
     processRun idsMVar TwoChannels{..} spec' (Just mtype') encoding' path = do
@@ -110,6 +120,7 @@ runJobcontrol env@Env{..} = do
     printHelp = liftIO $ do
         putStrLn "run <spec> <data_type> <encoding> <path/to/file> — run job"
         putStrLn "kill <job_msg_id> — kill job"
+        putStrLn "rep – repeat last command"
         putStrLn "help <command> — info about given command"
         putStrLn "help — this info"
 
@@ -125,6 +136,9 @@ runJobcontrol env@Env{..} = do
     printHelpKill = liftIO $ do
         putStrLn "Kills job that was started by message with given id"
         putStrLn "<job_msg_id> — id of message that started the job"
+
+    printHelpRep :: MQMonad ()
+    printHelpRep = liftIO $ putStrLn "Repeats the last command, even incorrect one."
 
     printError :: MQMonad ()
     printError = liftIO $ putStrLn "Incorrect command"
