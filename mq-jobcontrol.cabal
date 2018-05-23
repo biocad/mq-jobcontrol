@@ -1,5 +1,5 @@
 name:                mq-jobcontrol
-version:             0.1.0.5
+version:             0.1.0.6
 synopsis:            Jobcontrol component for Monique
 description:         Jobcontrol component for Monique
 homepage:            https://github.com/biocad/mq-jobcontrol
