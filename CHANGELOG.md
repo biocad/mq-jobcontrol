@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.1.1.1] - 2018-08-21
+### Changed
+- Protocol updates.
+
 ## [0.1.1.0] - 2018-05-25
 ### Changed
 - `MQMonad` turns into `MQMonadS`.
