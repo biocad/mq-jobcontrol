@@ -13,22 +13,23 @@ import           Control.Monad                (join, when)
 import           Control.Monad.Except         (throwError)
 import           Control.Monad.IO.Class       (liftIO)
 import qualified Data.ByteString              as BS (readFile)
-import qualified Data.ByteString.Char8        as BSC8 (unpack)
 import           Data.Map.Strict              (Map)
 import qualified Data.Map.Strict              as M (fromList, keys, (!))
 import           Data.String                  (fromString)
+import           Data.Text                    (pack, unpack)
 import           System.Directory             (doesFileExist)
 import           System.MQ.Component          (Env (..), TwoChannels (..),
                                                load2Channels, loadTechChannels)
 import           System.MQ.Error              (MQError (..), errorComponent)
 import           System.MQ.Monad              (MQMonad, foreverSafe, runMQMonad)
-import           System.MQ.Protocol           (Encoding, Hash, Message (..),
+import           System.MQ.Protocol           (Encoding, Id, Message (..),
                                                MessageType, Spec, createMessage,
-                                               createMessageBS, emptyHash,
+                                               createMessageBS, emptyId,
                                                messagePid, messageSpec, msgId,
                                                notExpires)
 import           System.MQ.Protocol.Technical (KillConfig (..))
-import           System.MQ.Transport          (push, sub)
+import           System.MQ.Transport          (Subscribe (..), allTopics, push,
+                                               sub)
 import           Text.Read                    (readMaybe)
 
 -- | Run Jobcontrol in command prompt.
@@ -49,7 +50,7 @@ runJobcontrol Env{..} = do
     foreverSafe name $ do
         command <- liftIO getLine
         let action = case words command of
-              ["run", spec', readMaybe -> mtype', encoding', path] -> processRun idsMVar commChannels spec' mtype' encoding' path
+              ["run", spec', readMaybe -> mtype', encoding', path] -> processRun idsMVar commChannels (pack spec') mtype' (pack encoding') path
               ["kill", fromString -> jobId]                        -> processKill techChannels jobId
               ["help", "run"]                                      -> printHelpRun
               ["help", "kill"]                                     -> printHelpKill
@@ -63,7 +64,7 @@ runJobcontrol Env{..} = do
     performAction :: MVar (MQMonad ()) -> MQMonad ()
     performAction actionVar = join (liftIO $ readMVar actionVar)
 
-    processRun :: MVar [(Hash, Spec)] -> TwoChannels -> Spec -> Maybe MessageType -> Encoding -> FilePath -> MQMonad ()
+    processRun :: MVar [(Id, Spec)] -> TwoChannels -> Spec -> Maybe MessageType -> Encoding -> FilePath -> MQMonad ()
     processRun _ _ _ Nothing _ _ = throwError (MQError errorComponent "unknown type of message")
     processRun idsMVar TwoChannels{..} spec' (Just mtype') encoding' path = do
         -- Throw error if path to file is invalid
@@ -74,24 +75,27 @@ runJobcontrol Env{..} = do
         -- Wait to make sure that id of message will be differet from its parent's id
         liftIO $ threadDelay oneSecond
         -- Create message with data that is already encoded in bytestring
-        msg@Message{..} <- createMessageBS emptyHash creator notExpires spec' encoding' mtype' dataBS
+        msg@Message{..} <- createMessageBS emptyId creator notExpires spec' encoding' mtype' dataBS
 
         -- Put id and spec of created message to MVar so thread that receives messages knew which messages to receive
         modifyIds idsMVar (msgId, msgSpec)
 
         -- Send message to queue
         push toScheduler msg
-        liftIO $ putStrLn $ "Sent message to Monique. Its id: " ++ BSC8.unpack msgId
+        liftIO $ putStrLn $ "Sent message to Monique. Its id: " ++ unpack msgId
 
-    processKill :: TwoChannels -> Hash -> MQMonad ()
+    processKill :: TwoChannels -> Id -> MQMonad ()
     processKill TwoChannels{..} jId = createMessage "" creator notExpires (KillConfig jId) >>= push toScheduler
 
-    modifyIds :: MVar [(Hash, Spec)] -> (Hash, Spec) -> MQMonad ()
+    modifyIds :: MVar [(Id, Spec)] -> (Id, Spec) -> MQMonad ()
     modifyIds idsMVar = liftIO . modifyMVar_ idsMVar . fmap pure . (:)
 
-    receiveMessages :: MVar [(Hash, Spec)] -> IO ()
+    receiveMessages :: MVar [(Id, Spec)] -> IO ()
     receiveMessages idsMVar = runMQMonad $ do
         TwoChannels{..} <- load2Channels
+        -- subscribe to every topics
+        subscribeTo fromScheduler allTopics
+        -- process messages
         foreverSafe name $ do
             -- Receive message from queue
             (tag, response@Message{..}) <- sub fromScheduler
@@ -144,5 +148,5 @@ runJobcontrol Env{..} = do
     oneSecond :: Int
     oneSecond = 10^(6 :: Int)
 
-    maybeToMap :: Maybe [(Hash, Spec)] -> Map Hash Spec
+    maybeToMap :: Maybe [(Id, Spec)] -> Map Id Spec
     maybeToMap = maybe mempty M.fromList
